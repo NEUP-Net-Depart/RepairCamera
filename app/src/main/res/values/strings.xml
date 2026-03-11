@@ -1,0 +1,30 @@
+﻿<resources>
+    <string name="app_name">先锋录像机</string>
+    <string name="flash_on">闪光灯已开</string>
+    <string name="flash_off">闪光灯已关</string>
+    <string name="flash_toggle">闪光灯</string>
+    <string name="zoom_ratio">%.1fx</string>
+    <string name="recording_time_default">00:00</string>
+    <string name="sign_in">签到</string>
+    <string name="register">登记</string>
+    <string name="record">录像</string>
+    <string name="pause">暂停</string>
+    <string name="resume">继续</string>
+    <string name="stop">停止</string>
+    <string name="permission_camera_audio_required">需要相机和录音权限，应用即将退出。</string>
+    <string name="permission_all_files_required">需要所有文件访问权限，应用即将退出。</string>
+    <string name="questionnaire_dialog_title">登记问卷编号</string>
+    <string name="questionnaire_hint">问卷编号</string>
+    <string name="confirm">确定</string>
+    <string name="cancel">取消</string>
+    <string name="questionnaire_saved">当前问卷编号：%1$s</string>
+    <string name="questionnaire_missing">请先登记问卷编号。</string>
+    <string name="recording_started">开始录像：%1$s</string>
+    <string name="recording_paused">录像已暂停</string>
+    <string name="recording_resumed">录像已继续</string>
+    <string name="recording_saved">录像已保存：%1$s</string>
+    <string name="recording_error">录像失败：%1$s</string>
+    <string name="storage_create_failed">无法创建录像目录。</string>
+    <string name="preview_unavailable">相机预览初始化失败。</string>
+    <string name="ask_manage_all_files">请授予“所有文件访问权限”以保存录像。</string>
+</resources>
