@@ -55,6 +55,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
+import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextOverlay
 import androidx.media3.transformer.Composition
@@ -232,7 +233,6 @@ class MainActivity : AppCompatActivity() {
         recordingTimeText.text = getString(R.string.recording_time_default)
         recordingTimeText.visibility = View.GONE
         overlayText.text = currentRegistrationText
-        overlayText.visibility = View.GONE
         updateFlashButton()
         updateRecordingUi(isRecording = false)
     }
@@ -449,7 +449,6 @@ class MainActivity : AppCompatActivity() {
                     pausedDurationMs = 0L
                     pauseStartElapsedMs = 0L
                     overlayText.text = registrationText
-                    overlayText.visibility = View.VISIBLE
                     startTimerUpdates()
                     updateRecordingUi(isRecording = true)
                     Toast.makeText(this, getString(R.string.recording_started, fileName), Toast.LENGTH_SHORT).show()
@@ -492,7 +491,6 @@ class MainActivity : AppCompatActivity() {
         isStoppingRecording = false
         activeRecording = null
         isRecordingPaused = false
-        overlayText.visibility = View.GONE
         stopTimerUpdates(reset = true)
         updateRecordingUi(isRecording = false)
 
@@ -515,9 +513,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun exportRecordedVideo(rawFile: File, finalFile: File, overlayContent: String) {
+        val rotationEffect = ScaleAndRotateTransformation.Builder()
+            .setRotationDegrees(90f)
+            .build()
         val overlayEffect = createVideoOverlayEffect(overlayContent)
         val editedMediaItem = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(rawFile)))
-            .setEffects(Effects(emptyList(), listOf(overlayEffect)))
+            .setEffects(Effects(emptyList(), listOf(rotationEffect, overlayEffect)))
             .build()
 
         if (finalFile.exists()) {
@@ -587,7 +588,7 @@ class MainActivity : AppCompatActivity() {
         val styledText = SpannableString(overlayContent).apply {
             setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             setSpan(StyleSpan(Typeface.BOLD), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            setSpan(AbsoluteSizeSpan(24, true), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(AbsoluteSizeSpan(30, true), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         val overlaySettings = StaticOverlaySettings.Builder()
             .setBackgroundFrameAnchor(-0.94f, -0.92f)

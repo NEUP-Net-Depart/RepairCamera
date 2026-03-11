@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -37,11 +37,13 @@
             android:background="@drawable/bg_camera_chip"
             android:ellipsize="end"
             android:maxLines="2"
+            android:minWidth="48dp"
+            android:minHeight="40dp"
             android:paddingHorizontal="14dp"
             android:paddingVertical="10dp"
+            android:text=""
             android:textColor="@color/white"
             android:textSize="15sp"
-            android:visibility="gone"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintStart_toStartOf="parent" />
 
