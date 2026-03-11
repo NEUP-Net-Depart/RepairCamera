@@ -1,9 +1,11 @@
-﻿package team.neupioneer.repaircamera
+package team.neupioneer.repaircamera
 
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
 import android.hardware.camera2.CameraCharacteristics
 import android.net.Uri
 import android.os.Build
@@ -13,9 +15,13 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.AbsoluteSizeSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.util.SizeF
 import android.view.LayoutInflater
-import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.Surface
 import android.view.View
@@ -45,6 +51,19 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.OverlayEffect
+import androidx.media3.effect.StaticOverlaySettings
+import androidx.media3.effect.TextOverlay
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Effects
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.TransformationRequest
+import androidx.media3.transformer.Transformer
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.textfield.TextInputEditText
@@ -56,12 +75,14 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
 
+@UnstableApi
 class MainActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var flashButton: AppCompatImageButton
     private lateinit var zoomText: TextView
     private lateinit var recordingTimeText: TextView
+    private lateinit var overlayText: TextView
     private lateinit var signInButton: AppCompatButton
     private lateinit var registerButton: AppCompatButton
     private lateinit var recordButton: AppCompatImageButton
@@ -80,16 +101,21 @@ class MainActivity : AppCompatActivity() {
     private var camera: Camera? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
+    private var exportTransformer: Transformer? = null
     private var isRecordingPaused = false
     private var isTorchEnabled = false
-    private var currentQuestionnaireId = buildDefaultQuestionnaireId()
-    private var currentOutputName: String? = null
+    private var currentRegistrationText = ""
+    private var currentOutputPath: String? = null
     private var permissionFlowStarted = false
     private var previewReady = false
     private var isStoppingRecording = false
+    private var isExportingVideo = false
     private var recordingStartElapsedMs = 0L
     private var pausedDurationMs = 0L
     private var pauseStartElapsedMs = 0L
+    private var currentRawVideoFile: File? = null
+    private var currentFinalVideoFile: File? = null
+    private var currentRecordingOverlayText: String? = null
 
     private val runtimePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -137,6 +163,8 @@ class MainActivity : AppCompatActivity() {
         stopTimerUpdates(reset = true)
         activeRecording?.close()
         activeRecording = null
+        exportTransformer?.cancel()
+        exportTransformer = null
         cameraExecutor.shutdown()
         super.onDestroy()
     }
@@ -146,6 +174,7 @@ class MainActivity : AppCompatActivity() {
         flashButton = findViewById(R.id.flashButton)
         zoomText = findViewById(R.id.zoomText)
         recordingTimeText = findViewById(R.id.recordingTimeText)
+        overlayText = findViewById(R.id.overlayText)
         signInButton = findViewById(R.id.signInButton)
         registerButton = findViewById(R.id.registerButton)
         recordButton = findViewById(R.id.recordButton)
@@ -202,6 +231,8 @@ class MainActivity : AppCompatActivity() {
 
         recordingTimeText.text = getString(R.string.recording_time_default)
         recordingTimeText.visibility = View.GONE
+        overlayText.text = currentRegistrationText
+        overlayText.visibility = View.GONE
         updateFlashButton()
         updateRecordingUi(isRecording = false)
     }
@@ -353,8 +384,6 @@ class MainActivity : AppCompatActivity() {
     private fun showQuestionnaireDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_questionnaire, null)
         val editText = dialogView.findViewById<TextInputEditText>(R.id.questionnaireEditText)
-        editText.setText(currentQuestionnaireId)
-        editText.setSelection(editText.text?.length ?: 0)
 
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.questionnaire_dialog_title)
@@ -362,8 +391,10 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.confirm) { _, _ ->
                 val input = editText.text?.toString()?.trim().orEmpty()
                 if (input.isNotEmpty()) {
-                    currentQuestionnaireId = input
-                    Toast.makeText(this, getString(R.string.questionnaire_saved, currentQuestionnaireId), Toast.LENGTH_SHORT).show()
+                    currentRegistrationText = input
+                    overlayText.text = currentRegistrationText
+                    updateIdleControlsState()
+                    Toast.makeText(this, getString(R.string.questionnaire_saved, currentRegistrationText), Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(this, R.string.questionnaire_missing, Toast.LENGTH_SHORT).show()
                 }
@@ -373,8 +404,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startRecording() {
-        val questionnaireId = currentQuestionnaireId.trim()
-        if (questionnaireId.isEmpty()) {
+        if (isExportingVideo) {
+            Toast.makeText(this, R.string.export_in_progress, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val registrationText = currentRegistrationText.trim()
+        if (registrationText.isEmpty()) {
             Toast.makeText(this, R.string.questionnaire_missing, Toast.LENGTH_SHORT).show()
             return
         }
@@ -383,16 +419,24 @@ class MainActivity : AppCompatActivity() {
         currentVideoCapture.targetRotation = Surface.ROTATION_270
         isStoppingRecording = false
 
-        val fileName = buildVideoFileName(questionnaireId)
-        val outputOptions = try {
-            createOutputOptions(fileName)
+        val fileName = buildVideoFileName(registrationText)
+        val rawFile = try {
+            createRawOutputFile(fileName)
         } catch (_: IllegalStateException) {
             Toast.makeText(this, R.string.storage_create_failed, Toast.LENGTH_LONG).show()
             return
         }
-        currentOutputName = buildDisplayPath(fileName)
+        val finalFile = File(OUTPUT_DIRECTORY_PATH, fileName)
 
-        var pendingRecording: PendingRecording = currentVideoCapture.output.prepareRecording(this, outputOptions)
+        currentRawVideoFile = rawFile
+        currentFinalVideoFile = finalFile
+        currentRecordingOverlayText = registrationText
+        currentOutputPath = finalFile.absolutePath
+
+        var pendingRecording: PendingRecording = currentVideoCapture.output.prepareRecording(
+            this,
+            FileOutputOptions.Builder(rawFile).build()
+        )
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             pendingRecording = pendingRecording.withAudioEnabled()
         }
@@ -404,6 +448,8 @@ class MainActivity : AppCompatActivity() {
                     recordingStartElapsedMs = SystemClock.elapsedRealtime()
                     pausedDurationMs = 0L
                     pauseStartElapsedMs = 0L
+                    overlayText.text = registrationText
+                    overlayText.visibility = View.VISIBLE
                     startTimerUpdates()
                     updateRecordingUi(isRecording = true)
                     Toast.makeText(this, getString(R.string.recording_started, fileName), Toast.LENGTH_SHORT).show()
@@ -429,26 +475,126 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 is VideoRecordEvent.Finalize -> {
-                    val hasError = event.hasError()
-                    val savedPath = currentOutputName.orEmpty()
-                    isStoppingRecording = false
-                    activeRecording = null
-                    isRecordingPaused = false
-                    stopTimerUpdates(reset = true)
-                    updateRecordingUi(isRecording = false)
-
-                    if (hasError) {
-                        Toast.makeText(this, getString(R.string.recording_error, event.error.toString()), Toast.LENGTH_LONG).show()
-                    } else {
-                        Toast.makeText(this, getString(R.string.recording_saved, savedPath), Toast.LENGTH_LONG).show()
-                    }
-
-                    currentOutputName = null
+                    handleRecordingFinalize(event)
                 }
 
                 else -> Unit
             }
         }
+    }
+
+    private fun handleRecordingFinalize(event: VideoRecordEvent.Finalize) {
+        val rawFile = currentRawVideoFile
+        val finalFile = currentFinalVideoFile
+        val overlayContent = currentRecordingOverlayText.orEmpty()
+        val savedPath = currentOutputPath.orEmpty()
+
+        isStoppingRecording = false
+        activeRecording = null
+        isRecordingPaused = false
+        overlayText.visibility = View.GONE
+        stopTimerUpdates(reset = true)
+        updateRecordingUi(isRecording = false)
+
+        currentRawVideoFile = null
+        currentFinalVideoFile = null
+        currentRecordingOverlayText = null
+        currentOutputPath = null
+
+        if (event.hasError()) {
+            Toast.makeText(this, getString(R.string.recording_error, event.error.toString()), Toast.LENGTH_LONG).show()
+            return
+        }
+
+        if (rawFile == null || finalFile == null) {
+            Toast.makeText(this, getString(R.string.recording_saved, savedPath), Toast.LENGTH_LONG).show()
+            return
+        }
+
+        exportRecordedVideo(rawFile, finalFile, overlayContent)
+    }
+
+    private fun exportRecordedVideo(rawFile: File, finalFile: File, overlayContent: String) {
+        val overlayEffect = createVideoOverlayEffect(overlayContent)
+        val editedMediaItem = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(rawFile)))
+            .setEffects(Effects(emptyList(), listOf(overlayEffect)))
+            .build()
+
+        if (finalFile.exists()) {
+            finalFile.delete()
+        }
+
+        isExportingVideo = true
+        var hevcExportApplied = true
+        Toast.makeText(this, R.string.export_started, Toast.LENGTH_SHORT).show()
+
+        val transformer = Transformer.Builder(this)
+            .setVideoMimeType(MimeTypes.VIDEO_H265)
+            .addListener(object : Transformer.Listener {
+                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    exportTransformer = null
+                    isExportingVideo = false
+                    rawFile.delete()
+                    val messageId = if (hevcExportApplied) R.string.recording_saved else R.string.recording_saved_fallback
+                    Toast.makeText(
+                        this@MainActivity,
+                        getString(messageId, finalFile.absolutePath),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+
+                override fun onError(
+                    composition: Composition,
+                    exportResult: ExportResult,
+                    exportException: ExportException
+                ) {
+                    exportTransformer = null
+                    isExportingVideo = false
+                    if (finalFile.exists()) {
+                        finalFile.delete()
+                    }
+                    Toast.makeText(
+                        this@MainActivity,
+                        getString(R.string.export_failed_raw_kept, rawFile.absolutePath),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+
+                override fun onFallbackApplied(
+                    composition: Composition,
+                    originalTransformationRequest: TransformationRequest,
+                    fallbackTransformationRequest: TransformationRequest
+                ) {
+                    if (fallbackTransformationRequest.videoMimeType != MimeTypes.VIDEO_H265) {
+                        hevcExportApplied = false
+                    }
+                }
+            })
+            .build()
+
+        exportTransformer = transformer
+
+        try {
+            transformer.start(editedMediaItem, finalFile.absolutePath)
+        } catch (_: Exception) {
+            exportTransformer = null
+            isExportingVideo = false
+            Toast.makeText(this, getString(R.string.export_failed_raw_kept, rawFile.absolutePath), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun createVideoOverlayEffect(overlayContent: String): OverlayEffect {
+        val styledText = SpannableString(overlayContent).apply {
+            setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(StyleSpan(Typeface.BOLD), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(AbsoluteSizeSpan(24, true), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val overlaySettings = StaticOverlaySettings.Builder()
+            .setBackgroundFrameAnchor(-0.94f, -0.92f)
+            .setOverlayFrameAnchor(-1f, -1f)
+            .build()
+        val textOverlay = TextOverlay.createStaticTextOverlay(styledText, overlaySettings)
+        return OverlayEffect(listOf(textOverlay))
     }
 
     private fun startTimerUpdates() {
@@ -484,16 +630,17 @@ class MainActivity : AppCompatActivity() {
         return String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
     }
 
-    private fun createOutputOptions(fileName: String): FileOutputOptions {
+    private fun createRawOutputFile(finalFileName: String): File {
         val outputDirectory = File(OUTPUT_DIRECTORY_PATH)
         if (!outputDirectory.exists() && !outputDirectory.mkdirs()) {
             throw IllegalStateException("Unable to create output directory")
         }
-        return FileOutputOptions.Builder(File(outputDirectory, fileName)).build()
-    }
 
-    private fun buildDisplayPath(fileName: String): String {
-        return "$OUTPUT_DIRECTORY_PATH/$fileName"
+        val rawFile = File(outputDirectory, finalFileName.removeSuffix(".mp4") + RAW_FILE_SUFFIX)
+        if (rawFile.exists()) {
+            rawFile.delete()
+        }
+        return rawFile
     }
 
     private fun togglePauseResume() {
@@ -522,15 +669,38 @@ class MainActivity : AppCompatActivity() {
         registerButton.visibility = if (isRecording) View.GONE else View.VISIBLE
         pauseButton.visibility = if (isRecording) View.VISIBLE else View.GONE
         pauseButton.isEnabled = isRecording && !isStoppingRecording
-        recordButton.isEnabled = !isRecording || !isStoppingRecording
         recordButton.setBackgroundResource(if (isRecording) R.drawable.bg_stop_button else R.drawable.bg_record_button)
         recordButton.contentDescription = getString(if (isRecording) R.string.stop else R.string.record)
         pauseButton.setImageResource(R.drawable.ic_pause_white)
+
+        if (isRecording) {
+            recordButton.isEnabled = !isStoppingRecording
+            recordButton.alpha = if (recordButton.isEnabled) 1f else 0.55f
+        } else {
+            updateIdleControlsState()
+        }
     }
 
-    private fun buildVideoFileName(questionnaireId: String): String {
+    private fun updateIdleControlsState() {
+        val hasRegistrationText = currentRegistrationText.isNotBlank()
+        recordButton.isEnabled = hasRegistrationText && !isExportingVideo
+        recordButton.alpha = if (recordButton.isEnabled) 1f else 0.55f
+        registerButton.isEnabled = !isExportingVideo
+        registerButton.alpha = if (registerButton.isEnabled) 1f else 0.7f
+    }
+
+    private fun buildVideoFileName(registrationText: String): String {
         val prefix = SimpleDateFormat("yyyyMMddHHmm", Locale.getDefault()).format(Date())
-        return "$prefix-$questionnaireId.mp4"
+        val safeName = sanitizeForFileName(registrationText).ifBlank { buildDefaultQuestionnaireId() }
+        return "$prefix-$safeName.mp4"
+    }
+
+    private fun sanitizeForFileName(value: String): String {
+        return value
+            .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
+            .replace(Regex("\\s+"), "_")
+            .trim('_')
+            .take(MAX_FILE_NAME_PART_LENGTH)
     }
 
     private fun buildDefaultQuestionnaireId(): String {
@@ -544,6 +714,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val OUTPUT_DIRECTORY_PATH = "/storage/emulated/0/Documents/PioneerCamera"
+        private const val RAW_FILE_SUFFIX = "_raw.mp4"
+        private const val MAX_FILE_NAME_PART_LENGTH = 48
 
         private val REQUIRED_RUNTIME_PERMISSIONS = buildList {
             add(Manifest.permission.CAMERA)
