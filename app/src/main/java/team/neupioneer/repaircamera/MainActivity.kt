@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.hardware.camera2.CameraCharacteristics
+import android.media.MediaCodecInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -59,11 +60,13 @@ import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextOverlay
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.TransformationRequest
+import androidx.media3.transformer.VideoEncoderSettings
 import androidx.media3.transformer.Transformer
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
@@ -529,12 +532,23 @@ class MainActivity : AppCompatActivity() {
         var hevcExportApplied = true
         Toast.makeText(this, R.string.export_started, Toast.LENGTH_SHORT).show()
 
+        val videoEncoderSettings = VideoEncoderSettings.Builder()
+            .setBitrate(3_000_000)
+            .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            .build()
+        val encoderFactory = DefaultEncoderFactory.Builder(this)
+            .setRequestedVideoEncoderSettings(videoEncoderSettings)
+            .setEnableFallback(false)
+            .build()
+
         val transformer = Transformer.Builder(this)
             .setVideoMimeType(MimeTypes.VIDEO_H265)
+            .setEncoderFactory(encoderFactory)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     exportTransformer = null
                     isExportingVideo = false
+                    updateIdleControlsState()
                     rawFile.delete()
                     val messageId = if (hevcExportApplied) R.string.recording_saved else R.string.recording_saved_fallback
                     Toast.makeText(
@@ -551,6 +565,7 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     exportTransformer = null
                     isExportingVideo = false
+                    updateIdleControlsState()
                     if (finalFile.exists()) {
                         finalFile.delete()
                     }
@@ -580,6 +595,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             exportTransformer = null
             isExportingVideo = false
+            updateIdleControlsState()
             Toast.makeText(this, getString(R.string.export_failed_raw_kept, rawFile.absolutePath), Toast.LENGTH_LONG).show()
         }
     }
@@ -588,7 +604,7 @@ class MainActivity : AppCompatActivity() {
         val styledText = SpannableString(overlayContent).apply {
             setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             setSpan(StyleSpan(Typeface.BOLD), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            setSpan(AbsoluteSizeSpan(30, true), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(AbsoluteSizeSpan(60, true), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         val overlaySettings = StaticOverlaySettings.Builder()
             .setBackgroundFrameAnchor(-0.94f, -0.92f)
